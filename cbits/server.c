@@ -19,7 +19,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <unistd.h>
+#include <sys/prctl.h>
 
 #define mbedtls_fprintf fprintf
 #define mbedtls_printf printf
@@ -49,6 +51,8 @@ int (*ra_tls_create_key_and_crt_der_f)(uint8_t** der_key, size_t* der_key_size, 
 #define SRV_CRT_PATH "ssl/server.crt"
 #define SRV_KEY_PATH "ssl/server.key"
 
+#define TRACE_BUFFER_SIZE 4096
+
 static void my_debug(void* ctx, int level, const char* file, int line, const char* str) {
     ((void)level);
 
@@ -76,6 +80,41 @@ static ssize_t file_read(const char* path, char* buf, size_t count) {
 }
 
 int startServer(int *flag, char *data) {
+
+  // ABHI : Property-based Attestation setup begins
+
+  /*
+   * fork() a separate enclave 
+   */
+  int pipe1_TEE_Enf[2]; // Pipe 1: TEE --> Enforcer
+  int pipe2_Enf_TEE[2]; // Pipe 2: Enforcer --> TEE
+  pid_t pid;
+  char TEE_msg[] = "Hello from TEE"; // will be the trace
+  char Enf_msg[] = "Hello from Enforcer";  // enforcer action
+  char read_buffer[TRACE_BUFFER_SIZE];
+
+  // Create both pipes
+  if (pipe(pipe1_TEE_Enf) == -1 || pipe(pipe2_Enf_TEE) == -1) {
+    perror("Bidirectional channel creation error");
+  }
+
+
+  pid = fork(); // forks an OS-level process that is locally attested
+
+  if (pid < 0) {  // Error during fork
+    perror("Error forking Enclave process");
+  }
+
+  // ABHI : Property-based Attestation setup ends
+
+  if(pid > 0) { // TEE process begins; else is the enforcer
+    // Close unused ends of the pipes
+    close(pipe1_TEE_Enf[0]);
+    close(pipe2_Enf_TEE[1]);
+
+
+
+
     int ret;
     size_t len;
     mbedtls_net_context listen_fd;
@@ -387,6 +426,64 @@ reset:
 
     memcpy(buf, data, len); // buf will be written back to client
 
+    // ABHI : Before writing back to client attest behaviour
+
+    // NOTE This is a post-action check; after the enclave has taken
+    // the desired action we consult the enforcer; we can kill the
+    // enclave after the enforcer says some action `A` produced a bad trace
+    // but by now atleast one bad action (A) could have corrupted
+    // the state (especially if this is persistent state)
+
+    // Also, NOTE the enforcer and the server loop are synchronous and
+    // a bad enforcer may block the server loop, which is bad for perf.
+
+    ssize_t bytesWritten;
+    ssize_t bytesRead;
+
+    // Write the trace to the enforcer through Pipe 1
+    /* const char *logFile = "calltrace.log"; //XXX: check if sealing key can be shared between enclaves */
+
+    /* int file_fd = open(logFile, O_RDONLY); */
+    /* if (file_fd == -1) { */
+    /*   perror("Failed to open log file"); */
+    /* } */
+    /* printf("Managed to open file"); */
+
+    /* char buffer[TRACE_BUFFER_SIZE]; */
+    /* ssize_t fileRead; */
+    /* // Read from the file in chunks and write to the pipe */
+    /* while ((fileRead = read(file_fd, buffer, TRACE_BUFFER_SIZE)) > 0) { */
+    /*   printf("Going to write something"); */
+    /*   if (write(pipe1_TEE_Enf[1], buffer, bytesRead) == -1) { */
+    /*     perror("Write to enforcer failed"); */
+    /*     break; */
+    /*   } */
+    /*   printf("Write worked"); */
+    /* } */
+
+    /* if (fileRead == -1) { */
+    /*   perror("Trace file read failed"); */
+    /* } */
+
+
+    bytesWritten = write(pipe1_TEE_Enf[1], TEE_msg, strlen(TEE_msg) + 1); // +1 for null terminator
+
+    if (bytesWritten == -1) {
+      perror("Write to enforcer failed");
+    }
+
+    // Read the response from the enforcer through Pipe 2
+    bytesRead = read(pipe2_Enf_TEE[0], read_buffer, sizeof(read_buffer));
+    if (bytesRead == -1) {
+      perror("Read from enforcer failed");
+    }
+    mbedtls_printf("  . TEE received: %s\n\n\n", read_buffer);
+
+    // We can read from `read_buffer` and depending on what the enforcer wants, we can terminate the enclave
+
+    // ABHI: Behaviour attested now write back to client
+
+
 
     mbedtls_printf("  > Write to client:");
     fflush(stdout);
@@ -447,5 +544,90 @@ exit:
     free(der_key);
     free(der_crt);
 
+
+    // Close the used ends after communication (from the PBA channel)
+    close(pipe1_TEE_Enf[1]);
+    close(pipe2_Enf_TEE[0]);
+
+
     return ret;
+  } else if (pid == 0) { // Enforcer process
+
+
+    //XXX: Do we really want the Enforcer to die when the TEE dies?
+    //     Can the TEE misuse this power to bypass the enforcer?
+    // Set enforcer to terminate when TEE(parent) dies
+    prctl(PR_SET_PDEATHSIG, SIGTERM);
+
+    // Verify that parent(TEE) is alive at the time of setting up PR_SET_PDEATHSIG
+    if (getppid() == 1) {
+      printf("Parent has already exited.\n");
+      exit(1);
+    }
+
+    // Close unused ends of the pipes
+    close(pipe1_TEE_Enf[1]);
+    close(pipe2_Enf_TEE[0]);
+
+
+    //read_buffer holds the trace
+    /*
+      while(1){
+      read // blocks and change context (hopefully)
+      read_buffer holds the trace
+      call enf_action = enforcer(trace)
+      write(enf_action) to enclave
+      }
+    */
+
+    while(1){
+      ssize_t bytesWritten;
+      ssize_t bytesRead;
+
+      // Read the message from the TEE through Pipe 1
+      /* char buffer[TRACE_BUFFER_SIZE]; */
+      /* while ((bytesRead = read(pipe1_TEE_Enf[0], buffer, TRACE_BUFFER_SIZE)) > 0) { */
+      /*   // Process each chunk of data (for example, print it) */
+      /*   fwrite(buffer, 1, bytesRead, stdout); */
+      /* } */
+
+      /* if (bytesRead == -1) { */
+      /*   perror("Read of trace failed"); */
+      /* } else { */
+      /*   printf("\nChild: End of data\n"); */
+      /* } */
+
+      bytesRead = read(pipe1_TEE_Enf[0], read_buffer, sizeof(read_buffer));
+      if (bytesRead == -1) {
+        perror("Read from TEE failed");
+      }
+
+      mbedtls_printf("  . Enforcer received: %s\n", read_buffer);
+      // Call whyenf on the trace from read_buffer
+
+      /* printf("Calling whyenf\n"); */
+
+      /* char* arr[] = {"enforcer/whyenf.exe","-sig", "enforcer/covid.sig", "-formula", "enforcer/covid_output.mfotl", "-log", "enforcer/covid.log", NULL}; */
+      /* // Execute the command */
+      /* if (execv("enforcer/whyenf.exe", arr) == -1) { */
+      /*   perror("Error executing whyenf.exe"); */
+      /*   return 1; */
+      /* } */
+      /* //Done executing */
+
+
+
+      // Send a response to the TEE through Pipe 2
+      bytesWritten = write(pipe2_Enf_TEE[1], Enf_msg, strlen(Enf_msg) + 1); // +1 for null terminator
+      if (bytesWritten == -1) {
+        perror("Write to TEE failed");
+      }
+    }
+
+    // Close the used ends after communication
+    close(pipe1_TEE_Enf[0]);
+    close(pipe2_Enf_TEE[1]);
+    return 0;
+
+  }
 }
