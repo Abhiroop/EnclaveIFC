@@ -440,31 +440,10 @@ reset:
     ssize_t bytesWritten;
     ssize_t bytesRead;
 
+    mbedtls_printf("f(data) computed!");
+
     // Write the trace to the enforcer through Pipe 1
     /* const char *logFile = "calltrace.log"; //XXX: check if sealing key can be shared between enclaves */
-
-    /* int file_fd = open(logFile, O_RDONLY); */
-    /* if (file_fd == -1) { */
-    /*   perror("Failed to open log file"); */
-    /* } */
-    /* printf("Managed to open file"); */
-
-    /* char buffer[TRACE_BUFFER_SIZE]; */
-    /* ssize_t fileRead; */
-    /* // Read from the file in chunks and write to the pipe */
-    /* while ((fileRead = read(file_fd, buffer, TRACE_BUFFER_SIZE)) > 0) { */
-    /*   printf("Going to write something"); */
-    /*   if (write(pipe1_TEE_Enf[1], buffer, bytesRead) == -1) { */
-    /*     perror("Write to enforcer failed"); */
-    /*     break; */
-    /*   } */
-    /*   printf("Write worked"); */
-    /* } */
-
-    /* if (fileRead == -1) { */
-    /*   perror("Trace file read failed"); */
-    /* } */
-
 
     bytesWritten = write(pipe1_TEE_Enf[1], TEE_msg, strlen(TEE_msg) + 1); // +1 for null terminator
 
@@ -585,18 +564,6 @@ exit:
       ssize_t bytesRead;
 
       // Read the message from the TEE through Pipe 1
-      /* char buffer[TRACE_BUFFER_SIZE]; */
-      /* while ((bytesRead = read(pipe1_TEE_Enf[0], buffer, TRACE_BUFFER_SIZE)) > 0) { */
-      /*   // Process each chunk of data (for example, print it) */
-      /*   fwrite(buffer, 1, bytesRead, stdout); */
-      /* } */
-
-      /* if (bytesRead == -1) { */
-      /*   perror("Read of trace failed"); */
-      /* } else { */
-      /*   printf("\nChild: End of data\n"); */
-      /* } */
-
       bytesRead = read(pipe1_TEE_Enf[0], read_buffer, sizeof(read_buffer));
       if (bytesRead == -1) {
         perror("Read from TEE failed");
