@@ -51,7 +51,7 @@ int (*ra_tls_create_key_and_crt_der_f)(uint8_t** der_key, size_t* der_key_size, 
 #define SRV_CRT_PATH "ssl/server.crt"
 #define SRV_KEY_PATH "ssl/server.key"
 
-#define TRACE_BUFFER_SIZE 4096
+#define MAX_EVT_LENGTH 256
 
 static void my_debug(void* ctx, int level, const char* file, int line, const char* str) {
     ((void)level);
@@ -91,7 +91,7 @@ int startServer(int *flag, char *data) {
   pid_t pid;
   char TEE_msg[] = "Hello from TEE"; // will be the trace
   char Enf_msg[] = "Hello from Enforcer";  // enforcer action
-  char read_buffer[TRACE_BUFFER_SIZE];
+  char read_buffer[200];
 
   // Create both pipes
   if (pipe(pipe1_TEE_Enf) == -1 || pipe(pipe2_Enf_TEE) == -1) {
@@ -443,7 +443,40 @@ reset:
     mbedtls_printf("f(data) computed!");
 
     // Write the trace to the enforcer through Pipe 1
-    /* const char *logFile = "calltrace.log"; //XXX: check if sealing key can be shared between enclaves */
+    /* Parse the last event */
+    const char *logFile = "calltrace.log"; //XXX: check if sealing key can be shared between enclaves
+
+    FILE *file = fopen(logFile, "r");
+    if (file == NULL) {
+      perror("Error opening file");
+    }
+
+    char line[MAX_EVT_LENGTH];
+    char last_line[MAX_EVT_LENGTH] = "";
+
+    // Read each line and store it in last_line
+    while (fgets(line, sizeof(line), file) != NULL) {
+      strncpy(last_line, line, MAX_EVT_LENGTH - 1);
+      last_line[MAX_EVT_LENGTH - 1] = '\0'; // Ensure null termination
+    }
+
+    fclose(file);
+
+    // last_line should be fed to enforcer through the pipe
+    // XXX: Major problem: the output is computed as a list and then the log is interspersed so
+    //      parsing the last event is incorrect because you want to capture all of the output events
+    // HACK: Parse log and read bring all events which has the same timestamp;
+    /*
+     * will lead to redundant enforcement computation like:
+       @10 foo(1)
+       @10 foo(2)
+       @10 foo(3)
+       @20 foo(4)
+
+       so, as the log is written, we will consult with the enforcer for `foo(1)`, `foo(1), foo(2)`,
+       `foo(1),foo(2),foo(3)`. Maybe there is a scope for optimisation here, where we consult the
+       enforcer as a bulk call.
+     */
 
     bytesWritten = write(pipe1_TEE_Enf[1], TEE_msg, strlen(TEE_msg) + 1); // +1 for null terminator
 
