@@ -79,6 +79,56 @@ static ssize_t file_read(const char* path, char* buf, size_t count) {
     return bytes;
 }
 
+
+int enforcer_shim(const char *input) {
+    char buffer[256];
+    char temp_filename[] = "/tmp/temp_input_XXXXXX";
+    FILE *temp_file;
+    int fd;
+
+    // Create a temporary file for input
+    fd = mkstemp(temp_filename);
+    if (fd == -1) {
+        perror("mkstemp");
+        exit(EXIT_FAILURE);
+    }
+
+    // Write the input to the temporary file
+    temp_file = fdopen(fd, "w");
+    if (temp_file == NULL) {
+        perror("fdopen");
+        close(fd);
+        exit(EXIT_FAILURE);
+    }
+    fprintf(temp_file, "%s", input);
+    fclose(temp_file);
+
+    // Construct the command to read from the temporary file
+    char command[512];
+    snprintf(command, sizeof(command), "enforcer/whyenf.exe -sig enforcer/covid.sig -formula enforcer/covid_output.mfotl < %s", temp_filename);
+
+    // Use popen to run the command and read its output
+    FILE *pipe = popen(command, "r");
+    if (pipe == NULL) {
+        perror("popen");
+        unlink(temp_filename);  // Clean up the temporary file
+        exit(EXIT_FAILURE);
+    }
+
+    // Read and process the output from ./foo
+    while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
+        printf("Output from executing whyenf: %s", buffer);
+    }
+
+    // XXX: return buffer here
+
+    // Clean up
+    pclose(pipe);
+    unlink(temp_filename);  // Delete the temporary file
+
+    return 0;
+}
+
 int startServer(int *flag, char *data) {
 
   // ABHI : Property-based Attestation setup begins
@@ -478,7 +528,7 @@ reset:
        enforcer as a bulk call.
      */
 
-    bytesWritten = write(pipe1_TEE_Enf[1], TEE_msg, strlen(TEE_msg) + 1); // +1 for null terminator
+    bytesWritten = write(pipe1_TEE_Enf[1], last_line, strlen(last_line) + 1); // +1 for null terminator
 
     if (bytesWritten == -1) {
       perror("Write to enforcer failed");
@@ -592,9 +642,11 @@ exit:
       }
     */
 
+
     while(1){
       ssize_t bytesWritten;
       ssize_t bytesRead;
+
 
       // Read the message from the TEE through Pipe 1
       bytesRead = read(pipe1_TEE_Enf[0], read_buffer, sizeof(read_buffer));
@@ -603,18 +655,12 @@ exit:
       }
 
       mbedtls_printf("  . Enforcer received: %s\n", read_buffer);
+
       // Call whyenf on the trace from read_buffer
 
-      /* printf("Calling whyenf\n"); */
+      enforcer_shim(read_buffer);
 
-      /* char* arr[] = {"enforcer/whyenf.exe","-sig", "enforcer/covid.sig", "-formula", "enforcer/covid_output.mfotl", "-log", "enforcer/covid.log", NULL}; */
-      /* // Execute the command */
-      /* if (execv("enforcer/whyenf.exe", arr) == -1) { */
-      /*   perror("Error executing whyenf.exe"); */
-      /*   return 1; */
-      /* } */
-      /* //Done executing */
-
+      // Done executing
 
 
       // Send a response to the TEE through Pipe 2
