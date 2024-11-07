@@ -538,7 +538,15 @@ reset:
     }
     mbedtls_printf("  . TEE received: %s\n\n\n", read_buffer);
 
-    // We can read from `read_buffer` and depending on what the enforcer wants, we can terminate the enclave
+    // We can read from `read_buffer` and depending on what the enforcer wants
+    // we can terminate the enclave
+    /*
+     * if (read_buffer == SUPPRESS){
+         *flag = 5; // suppression code
+         goto reset;
+       }
+     *
+     */
 
     // ABHI: Behaviour attested now write back to client
 

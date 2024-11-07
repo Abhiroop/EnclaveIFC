@@ -620,7 +620,15 @@ runAppRA ident (App s) = do
         poke fptr 0
         -- continue Haskell's event loop
         loop vTable fptr dptr
+{-
 
+else if (fromEnum int_val == 5) // suppression
+   rollback s
+   poke fptr 0
+   loop vTable fptr dptr
+
+
+-}
 
 ffiComp :: ThreadId -> Ptr CInt -> Ptr CChar -> IO ()
 ffiComp tid fptr dptr = do
